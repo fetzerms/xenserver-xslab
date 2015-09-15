@@ -61,14 +61,14 @@ Parameters:
                        Currently only used with baseline-delete
 
 Examples:
-    xslab list
-    xslab add --vm lab_debian8
-    xslab baseline-create --vm lab_debian8
-    xslab baseline-delete --vm lab_debian8 --num 1
-    xslab baseline-list --vm lab_debian8
-    xslab revert --vm lab_debian8
-    xslab auto-revert
-    xslab delete --vm lab_debian8
+- xslab list
+- xslab add --vm lab_debian8
+- xslab baseline-create --vm lab_debian8
+- xslab baseline-delete --vm lab_debian8 --num 1
+- xslab baseline-list --vm lab_debian8
+- xslab revert --vm lab_debian8
+- xslab auto-revert
+- xslab delete --vm lab_debian8
 
 Example usage
 --------------
