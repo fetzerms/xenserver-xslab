@@ -1,0 +1,640 @@
+#!/bin/bash
+#===================================================================================
+# This script implements some sort of lab management for XenServer virtualized
+# machines. Virtual machines can be added and removed to or from the lab. 
+#
+# The lab machines can be reverted using several baselines (=snapshots), either
+# manually using xslab or with adding a cronjob to automatically revert stopped
+# vms.
+# 
+# Run the script without arguments to get a list of possible options.
+#
+# @Author:  Matthias Fetzer ( xslab [at] rofl.cat )
+# @Version: 1.0
+#
+# @Changelog:
+#             2015-09-15: Initial version                              ( fetzerms )
+#
+#
+#===================================================================================
+
+# Tags and prefixes. Feel free to adjust. 
+# But make sure to use unique names.
+tagEnabled="xslab:enabled"
+tagDisabled="xslab:disabled"
+baselinePrefix="xslab:baseline"
+
+# Header/Footer/Text for the console output.
+xslabHeader="+----[ xslab ]------------------------------------------------->"
+xslabFooter="+-------------------------------------------------------------->"
+xslabText="| "
+
+#= listVMs =========================================================================
+#
+# Function:    listVMs
+# Description: Lists all VMs.
+#
+# Examples:    listVMs lab_Debian8
+#
+#===================================================================================
+listVMs(){
+
+	printText "The following VMs are enabled:"
+        printEmptyLine
+	listEnabledVMs
+        printEmptyLine
+	printText "The following VMs are disabled:"
+        printEmptyLine
+	listDisabledVMs
+}
+
+#= listEnabledVMs ==================================================================
+#
+# Function:    listEnabledVMs
+# Description: Lists all enabled VMs.
+#
+# Examples:    listEnabledVMs lab_Debian8
+#
+#===================================================================================
+listEnabledVMs(){
+	OIFS=$IFS
+	IFS=","
+	for vm in $(xe vm-list tags:contains=$tagEnabled params=name-label --minimal); do
+		printText "  - $vm"
+	done
+	IFS=$OIFS
+}
+
+#= listDisabledVMs =================================================================
+#
+# Function:    listDisabledVMs
+# Description: Lists all disabled VMs.
+#
+# Examples:    listDisabledVMs lab_Debian8
+#
+#===================================================================================
+listDisabledVMs(){
+	OIFS=$IFS
+	IFS=","
+	for vm in $(xe vm-list tags:contains=$tagDisabled params=name-label --minimal); do
+		printText "  - $vm"
+	done
+	IFS=$OIFS
+}
+
+#= enableVM ========================================================================
+#
+# Function:    enableVM
+# Description: Enables a given VM
+#
+# Parameter:   $1 - The vm to enable
+#
+# Examples:    enableVM lab_Debian8
+#
+#===================================================================================
+enableVM(){
+        vm=$1
+
+        if isVMDisabled $vm; then
+        	uuid=$( getVmUUID $vm )
+        	setEnabled $uuid
+        	unsetDisabled $uuid
+                printText "$vm has been enabled."
+        else
+                printText "$vm is not disabled or not added to xslab."
+        fi
+}
+
+#= disableVM =======================================================================
+#
+# Function:    disableVM
+# Description: Disables a given VM
+#
+# Parameter:   $1 - The vm to disable
+#
+# Examples:    disableVM lab_Debian8
+#
+#===================================================================================
+disableVM(){
+        vm=$1
+
+        if isVMEnabled $vm;  then
+        	uuid=$( getVmUUID $vm )
+        	setDisabled $uuid
+        	unsetEnabled $uuid
+                printText "$vm has been disabled."
+        else
+                printText "$vm is not enabled or not added to xslab."
+        fi
+}
+
+#= addVM ===========================================================================
+#
+# Function:    addVM
+# Description: Adds a given vm to xslab and creates an initial baseline.
+#
+# Parameter:   $1 - The vm to add
+#
+# Examples:    addVM lab_Debian8
+#
+#===================================================================================
+addVM(){
+	vm=$1
+        if isVMEnabled $vm || isVMDisabled $vm ; then
+                printText "$vm is already added to xslab."
+        else
+                printText "Adding $vm to xslab."
+        	uuid=$( getVmUUID $vm )
+        	setEnabled $uuid
+        	unsetDisabled $uuid 2> /dev/null
+        	baselineCreate $vm
+        fi
+}
+
+#= delVM ===========================================================================
+#
+# Function:    delVM
+# Description: Removes a given vm from xslab
+#
+# Parameter:   $1 - The vm to remove
+#
+# Examples:    delVM lab_Debian8
+#
+#===================================================================================
+delVM(){
+	vm=$1
+        if isVMEnabled $vm || isVMDisabled $vm ; then
+        	uuid=$( getVmUUID $vm )
+        	unsetEnabled $uuid 2> /dev/null
+        	unsetDisabled $uuid 2> /dev/null
+                printText "Removing $vm from xslab."
+        else
+                printText "$vm is not added to xslab."
+        fi
+}
+
+#= setEnabled ======================================================================
+#
+# Function:    setEnabled
+# Description: Removes the disabled tag from a given VM.
+#
+# Parameter:   $1 - The vm to set the enabled tag for.
+#
+# Examples:    setEnabled lab_Debian8
+#
+#===================================================================================
+setEnabled(){
+	uuid=$1
+	xe vm-param-add param-name=tags param-key="$tagEnabled" uuid=$uuid
+}
+
+#= unsetEnabled ====================================================================
+#
+# Function:    unsetEnabled
+# Description: Removes the disabled tag from a given VM.
+#
+# Parameter:   $1 - The vm to unset the enabled tag for.
+#
+# Examples:    unsetEnabled lab_Debian8
+#
+#===================================================================================
+unsetEnabled(){
+	uuid=$1
+	xe vm-param-remove param-name=tags uuid=$uuid param-key="$tagEnabled"
+}
+
+#= setDisabled =====================================================================
+#
+# Function:    setDisabled
+# Description: Removes the disabled tag from a given VM.
+#
+# Parameter:   $1 - The vm to set the disabled tag for.
+#
+# Examples:    setDisabled lab_Debian8
+#
+#===================================================================================
+setDisabled(){
+	uuid=$1
+	xe vm-param-add param-name=tags param-key="$tagDisabled" uuid=$uuid
+}
+
+#= unsetDisabled ===================================================================
+#
+# Function:    unsetDisabled
+# Description: Removes the disabled tag from a given VM.
+#
+# Parameter:   $1 - The vm to unset the disabled tag for.
+#
+# Examples:    unsetDisabled lab_Debian8
+#
+#===================================================================================
+unsetDisabled(){
+	uuid=$1
+	xe vm-param-remove param-name=tags uuid=$uuid param-key="$tagDisabled"
+}
+
+#= getVmUUID =======================================================================
+#
+# Function:    getVmUUID
+# Description: Retrieves the XenServer uuid for a given VM name.
+#
+# Parameter:   $1 - The VM to retrieve the uuid for.
+#
+# Returns:     The vms UUID
+#
+# Examples:    getVmUUID lab_Debian8
+#
+#===================================================================================
+getVmUUID(){
+	vm=$1
+	uuid=$(xe vm-list name-label=$vm params=uuid --minimal)
+	echo $uuid
+}
+
+#= baselineCreate ==================================================================
+#
+# Function:    baselineCreate
+# Description: Creates a new baseline for a given VM
+#
+# Parameter:   $1 - The VM to create a new baseline for
+#
+# Examples:    baselineCreate lab_Debian8
+#
+#===================================================================================
+baselineCreate(){
+	vm=$1
+	uuid=$( getVmUUID $vm )
+	snapshotLabel="$baselinePrefix"_"$vm_$( date +%s )"
+	descriptionLabel="$baselinePrefix"_"$vm"
+
+        printText "Creating new baseline for $vm:"
+        printEmptyLine
+
+        printText "  - Creating new snapshot down $vm ... "
+	xe vm-snapshot vm=$vm new-name-label=$snapshotLabel new-name-description=$descriptionLabel > /dev/null
+
+        printEmptyLine
+        printText "New baseline for $vm created."
+}
+
+#= getBaselineUUID =================================================================
+#
+# Function:    getBaselineUUID
+# Description: Returns the XenServer Snapshot-UUID for a given Baseline
+#
+# Parameter:   $1 - The baseline to retrieve the uuid for.
+#
+# Returns:     The baselines UUID
+#
+# Examples:    getBaselineUUID baseline_lab_Debian8
+#
+#===================================================================================
+getBaselineUUID(){
+	snapshotName=$1
+	baselineUUID=$( xe snapshot-list name-label=$snapshotName params=uuid --minimal )
+	echo $baselineUUID
+}
+
+#= revertVM ========================================================================
+#
+# Function:    revertVM
+# Description: Reverts a given and enabled VM to its latest baseline.
+#
+# Parameter:   $1 - The vm to revert
+#
+# Examples:    revertVM lab_Debian8
+#
+#===================================================================================
+revertVM(){
+	vm=$1
+
+        if ! isVMEnabled $vm ; then
+                printText "$vm is disabled or not added to xslab."
+        fi
+
+
+	snapshot=$( xe snapshot-list name-description="$baselinePrefix"_"$vm" params=name-label --minimal | sed 's/,/\n/g' | sort -nr | head -1 )
+        printText "Reverting $vm to baseline $snapshot"
+
+	BaselineUUID=$( getBaselineUUID $snapshot )
+	xe snapshot-revert snapshot-uuid=$BaselineUUID
+        xe vm-cd-eject vm=$vm > /dev/null 2>&1
+	xe vm-start vm=$vm
+}
+
+#= autoRevert ======================================================================
+#
+# Function:    autoRevert
+# Description: Reverts all enabled and stopped VMs to the latest baseline.
+#
+# Examples:    autoRevert
+#
+#===================================================================================
+autoRevert(){
+        printText "Reverting all enabled and powered off VMs:"
+        printEmptyLine
+	uuids=$(xe vm-list tags:contains=$tagEnabled params=uuid --minimal power-state=halted)
+	IFS=","
+	for uuid in $uuids; do
+		vmName=$(xe vm-list uuid=$uuid params=name-label --minimal)
+		revertVM $vmName
+	done
+}
+
+#= isVMRunning =====================================================================
+#
+# Function:    isVMRunning
+# Description: Checks if a given VM is running
+#
+# Parameter:   $1 - The vm to check
+#
+# Returns:     1 - if the vm is not running
+#              0 - if the vm is running
+#
+# Examples:    isVMRunning lab_Debian8
+#
+#===================================================================================
+isVMRunning(){
+	vm=$1
+	uuid=$( getVmUUID $vm )
+	powerState=$(xe vm-list uuid=$uuid params=power-state --minimal)
+	if [ "$powerState" == "running" ]; then
+		return 0
+	else
+		return 1
+	fi
+}
+
+#= isVMEnabled =====================================================================
+#
+# Function:    isVMEnabled
+# Description: Checks if a given VM is enabled.
+#
+# Parameter:   $1 - The vm to check
+#
+# Returns:     1 - if the vm is not enabled
+#              0 - if the vm is enabled
+#
+# Examples:    isVMEnabled lab_Debian8
+#
+#===================================================================================
+isVMEnabled(){
+        vm=$1
+        uuid=$(xe vm-list name-label="$vm" tags:contains="$tagEnabled" --minimal)
+        if [ -z $uuid ]; then
+                return 1
+        else
+                return 0
+        fi
+}
+
+#= isVMDisabled ====================================================================
+#
+# Function:    isVMDisabled
+# Description: Checks if a given VM is disabled.
+#
+# Parameter:   $1 - The vm to check
+#
+# Returns:     1 - if the vm is not disabled
+#              0 - if the vm is disabled
+#
+# Examples:    isVMDisabled lab_Debian8
+#
+#===================================================================================
+isVMDisabled(){
+        vm=$1
+        uuid=$(xe vm-list name-label="$vm" tags:contains="$tagDisabled" --minimal)
+        if [ -z $uuid ]; then
+                return 1
+        else
+                return 0
+        fi
+}
+
+#= baselineList ====================================================================
+#
+# Function:    baselineList
+# Description: Lists all baselines for a given VM.
+#
+# Parameter:   $1 - The vm to list baselines for.
+#
+# Examples:    baselineList lab_Debian8
+#
+#===================================================================================
+baselineList(){
+        vm=$1
+        baselines=$( xe snapshot-list name-description="$baselinePrefix"_"$vm" params=name-label --minimal | sed 's/,/\n/g' | sort -nr )
+
+        printText "Listing baselines for $vm:"
+        printEmptyLine
+
+        typeset -i i=1
+        for baseline in $baselines ; do
+
+                unixDate=$( echo $baseline | awk -F "_" '{ print $NF }' )
+                readableDate=$(date -d @"$unixDate" "+%Y-%m-%d / %H:%M")
+                printText "   ( $(printf "%3s" "$i") ) @ $readableDate - $baseline"
+                let i++
+        done
+}
+
+#= baselineDelete ==================================================================
+#
+# Function:    baselineDelete
+# Description: Deletes a given baseline for a vm.
+#
+# Parameter:   $1 - The vm to delete the baseline from.
+#              $2 - The number of the baseline to delete.
+#
+# Examples:    baselineDelete lab_Debian8 2
+#
+#===================================================================================
+baselineDelete(){
+        vm=$1
+        num=$2
+        baselines=$( xe snapshot-list name-description="$baselinePrefix"_"$vm" params=name-label --minimal | sed 's/,/\n/g' | sort -nr )
+
+        typeset -i i=1
+        for baseline in $baselines ; do
+                if [ $i -eq $num ]; then
+                        printText "Deleting baseline $baseline from $vm:"
+                        uuid=$( getBaselineUUID $baseline)
+                        xe snapshot-destroy snapshot-uuid=$uuid
+                fi
+                let i++
+        done
+}
+
+#= printHelp =======================================================================
+#
+# Function:    printHelp
+# Description: Prints the help
+#
+# Examples:    printHelp
+#
+#===================================================================================
+printHelp(){
+
+        printText "Usage: $(basename $0) <command> <parameters>"
+        printText 
+        printText "   Commands:"
+        printText "     - add               : Add a vm to xslab. This will create an initial baseline."
+        printText "     - delete            : Delete a vm from xslab. This will NOT delete baselines."
+        printText "     - enable            : Enable a VM which has been added to xslab."
+        printText "     - disable           : Disable a VM which has been added to xslab."
+        printText "     - list              : List VMs that have been added to xslab."
+        printText "     - revert            : Revert VM to latest baseline."
+        printText "     - auto-revert       : Revert all enabled and powered off VMs to the latest baseline and boot them."
+        printText "     - baseline-create   : Create a new baseline for a given VM."
+        printText "     - baseline-delete   : Delete the n-th baseline from a given VM."
+        printText "     - baseline-list     : Lists all baselines for a given VM."
+        printText
+        printText "   Parameters:"
+        printText "     - --vm/-m       : The VM name to perform operations on."
+        printText "     - --num/-n      : The n-th element to perform operations on. "
+        printText "                       Currently only used with baseline-delete"
+        printText
+        printText "   Examples:"
+        printText "     - $(basename $0) list"
+        printText "     - $(basename $0) add --vm lab_debian8"
+        printText "     - $(basename $0) baseline-create --vm lab_debian8"
+        printText "     - $(basename $0) baseline-delete --vm lab_debian8 --num 1"
+        printText "     - $(basename $0) baseline-list --vm lab_debian8"
+        printText "     - $(basename $0) revert --vm lab_debian8"
+        printText "     - $(basename $0) auto-revert"       
+        printText "     - $(basename $0) delete --vm lab_debian8"
+        printText 
+}
+
+
+# helper to print xslab header
+printHeader(){
+        echo -e "$xslabHeader"
+}
+
+# helper to print xslab footer
+printFooter(){
+	echo -e "$xslabFooter"
+}
+
+# helper to print text between header and footer.
+printText(){
+        while IFS= read -r line; do
+                echo "$xslabText$line"
+        done <<< "$@"
+}
+
+# helper to print an empty line.
+printEmptyLine(){
+        printText
+}
+
+command=$1
+shift
+
+OIFS=$IFS
+IFS=$'\n'
+
+# Argument parsing
+while [[ $# > 1 ]]; do
+
+	key="$1"
+
+	case $key in
+		-m|--vm)
+			vm="$2"
+			shift
+			;;
+                -n|--num)
+                        num="$2"
+                        shift
+                        ;;
+		*)
+			shift # ignore unknown option.
+		;;
+	esac
+done	
+shift
+
+printHeader
+printEmptyLine
+
+case $command in
+	add )
+                if [ -z $vm ]; then
+                        printText " --vm argument is required."
+                else
+        		addVM $vm
+                fi
+		;;
+	delete )
+                if [ -z $vm ]; then
+                        printText " --vm argument is required."
+                else
+        		delVM $vm
+                fi
+		;;
+	enable )
+                if [ -z $vm ]; then
+                        printText " --vm argument is required."
+                else
+        		enableVM $vm
+                fi
+		;;
+	disable )
+                if [ -z $vm ]; then
+                        printText " --vm argument is required."
+                else
+        		disableVM $vm
+                fi
+		;;
+	list )
+		listVMs
+		;;
+
+	baseline-create )
+                if [ -z $vm ]; then
+                        printText " --vm argument is required."
+                else
+        		baselineCreate $vm
+                fi
+		;;
+
+	baseline-delete )
+                if [ -z $vm ]; then
+                        printText " --vm argument is required."
+                elif [ -z $num ]; then
+                        printText " --num argument is required."
+                else
+	        	baselineDelete $vm $num
+                fi
+		;;
+
+	baseline-list )
+                if [ -z $vm ]; then
+                        printText " --vm argument is required."
+                else
+                        baselineList $vm
+                fi
+		
+		;;
+
+	revert )
+                if [ -z $vm ]; then
+                        printText " --vm argument is required."
+                else 
+        		revertVM $vm
+                fi
+		;;
+
+	auto-revert )
+		autoRevert
+		;;
+	* )
+		# print the help
+		printHelp
+		;;
+esac
+
+printEmptyLine
+printFooter
