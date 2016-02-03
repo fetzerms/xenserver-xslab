@@ -270,7 +270,7 @@ baselineCreate(){
         printText "Creating new baseline for $vm:"
         printEmptyLine
 
-        printText "  - Creating new snapshot down $vm ... "
+        printText "  - Creating new snapshot for $vm ... "
 	xe vm-snapshot vm=$vm new-name-label=$snapshotLabel new-name-description=$descriptionLabel > /dev/null
 
         printEmptyLine
