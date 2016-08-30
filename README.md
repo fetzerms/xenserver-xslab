@@ -34,6 +34,7 @@ Use the following steps to install the cronjob:
 
     crontab -e
 Add the following cronjob (you may use other intervals): 
+
     */5	*	*	*	*	/root/bin/xslab auto-revert
  
 General Usage
